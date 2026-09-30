@@ -26,6 +26,10 @@
     console.error("AutoContinue not registered. Paste setup.js then action-auto-continue.js first.");
     return;
   }
+  if (typeof action.findComposer !== "function") {
+    console.error("Registered AutoContinue is an old version without findComposer(). Re-paste action-auto-continue.js first.");
+    return;
+  }
 
   // --- Test 1: plain click path ---
   const fakeAlert = document.createElement("div");
@@ -65,8 +69,16 @@
   document.body.appendChild(fakeEditable);
 
   window.autoContinueHarnessMessage = "test harness message";
-  const detected2 = action.check();
-  if (detected2) action.execute(detected2);
+  // Point the composer lookup at the fake box so the test never touches the
+  // real compose box. Restored in finally, even if execute() throws.
+  const originalFindComposer = action.findComposer;
+  action.findComposer = () => fakeEditable;
+  try {
+    const detected2 = action.check();
+    if (detected2) action.execute(detected2);
+  } finally {
+    action.findComposer = originalFindComposer;
+  }
 
   assert("execute() types the harness message instead of clicking", fakeEditable.textContent === "test harness message");
   assert("execute() does not click the button when a harness message is set", !clicked2);
