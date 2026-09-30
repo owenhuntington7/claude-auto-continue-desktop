@@ -54,16 +54,29 @@ box instead; that's how the textContent insertion bug was found.
 
 ## Status
 
-Unverified against the live Claude Desktop DOM. The detection logic (a
-"Continue" button inside a `[role="alert"]` container) is a best guess based
-on how the equivalent Chrome extension and prior forks describe the banner.
-If it doesn't fire, open the Elements tab while the banner is showing, find
-the real button and its container, and update `check()` in
-`action-auto-continue.js` to match. Selectors breaking on Anthropic UI
-updates is the normal failure mode for every project in this lineage, not a
-sign something else is wrong. If `test-harness.js` passes but a real banner
-still doesn't trigger it, that's the confirmation: the assumed shape is
-wrong, not the framework.
+As of 2026-09-30:
+
+1. `test-harness.js` passes 6/6
+2. The compose-box selector (`div[contenteditable="true"].ProseMirror`)
+   matched the live compose box
+3. Writing the compose box via `textContent` failed live (ProseMirror
+   discarded it); replaced with `execCommand("insertText")`, which passes the
+   mock but hasn't been seen submitting a real message
+4. 30 consecutive lightweight tool calls in one turn did **not** trigger the
+   limit banner. The banner does still appear in practice on long,
+   read-heavy runs, so the trigger is likely something other than a raw call
+   count. Don't try to force it with a cheap loop; wait for a real long run
+5. The banner selector in `check()` is still unverified against the real banner
+
+The detection logic (a "Continue" button inside a `[role="alert"]`
+container) is a best guess based on how the equivalent Chrome extension and
+prior forks describe the banner. If it doesn't fire, open the Elements tab
+while the banner is showing, find the real button and its container, and
+update `check()` in `action-auto-continue.js` to match. Selectors breaking on
+Anthropic UI updates is the normal failure mode for every project in this
+lineage, not a sign something else is wrong. If `test-harness.js` passes but
+a real banner still doesn't trigger it, that's the confirmation: the assumed
+shape is wrong, not the framework.
 
 ## Lineage
 
