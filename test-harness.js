@@ -2,19 +2,22 @@
  * Smoke test for AutoContinueAction. Paste AFTER setup.js and
  * action-auto-continue.js.
  *
- * Builds fake DOM nodes shaped like the real "Continue" banner and compose
- * box, then calls check()/execute() directly (bypassing the MutationObserver,
- * which is just generic plumbing, not what this is testing). Confirms the
- * detection and action logic work against the assumed DOM shape.
+ * Builds fake DOM nodes shaped like the real "Continue" banner, compose box,
+ * and send button, then calls check()/execute() directly (bypassing the
+ * MutationObserver, which is just generic plumbing, not what this is
+ * testing). Confirms the detection and action logic work against the assumed
+ * DOM shape.
  *
- * This does NOT confirm the real selectors match Claude Desktop's actual
- * markup. That only gets confirmed live, the next time the real limit banner
- * shows up. If a real banner doesn't fire AutoContinue but this test passes,
- * the assumed shape in check()/execute() is wrong, not the test.
+ * This does NOT confirm the real banner selector matches Claude Desktop's
+ * actual markup. That only gets confirmed live, the next time the real limit
+ * banner shows up. If a real banner doesn't fire AutoContinue but this test
+ * passes, the assumed shape in check() is wrong, not the test.
  *
- * Cleans up every node it creates. Safe to paste multiple times.
+ * The compose-box and send-button lookups are both pointed at fakes, so this
+ * never types into or submits the real chat. Cleans up every node it
+ * creates. Safe to paste multiple times.
  */
-(() => {
+(async () => {
   const results = [];
   const assert = (label, condition) => {
     results.push({ label, pass: !!condition });
@@ -26,76 +29,109 @@
     console.error("AutoContinue not registered. Paste setup.js then action-auto-continue.js first.");
     return;
   }
-  if (typeof action.findComposer !== "function") {
-    console.error("Registered AutoContinue is an old version without findComposer(). Re-paste action-auto-continue.js first.");
+  if (typeof action.findComposer !== "function" || typeof action.findSendButton !== "function") {
+    console.error("Registered AutoContinue is an old version without findComposer()/findSendButton(). Re-paste action-auto-continue.js first.");
     return;
   }
 
-  // --- Test 1: plain click path ---
-  const fakeAlert = document.createElement("div");
-  fakeAlert.setAttribute("role", "alert");
-  const fakeButton = document.createElement("button");
-  fakeButton.textContent = "Continue";
-  let clicked = false;
-  fakeButton.addEventListener("click", () => { clicked = true; });
-  fakeAlert.appendChild(fakeButton);
-  document.body.appendChild(fakeAlert);
+  const makeBanner = () => {
+    const alert = document.createElement("div");
+    alert.setAttribute("role", "alert");
+    const btn = document.createElement("button");
+    btn.textContent = "Continue";
+    const state = { clicked: false };
+    btn.addEventListener("click", () => { state.clicked = true; });
+    alert.appendChild(btn);
+    document.body.appendChild(alert);
+    return { alert, btn, state };
+  };
+
+  const makeComposer = () => {
+    const box = document.createElement("div");
+    box.setAttribute("contenteditable", "true");
+    box.classList.add("ProseMirror");
+    document.body.appendChild(box);
+    return box;
+  };
+
+  const makeSend = (disabled) => {
+    const btn = document.createElement("button");
+    btn.setAttribute("aria-label", "Send message");
+    btn.disabled = !!disabled;
+    const state = { clicked: false };
+    btn.addEventListener("click", () => { state.clicked = true; });
+    document.body.appendChild(btn);
+    return { btn, state };
+  };
 
   const savedHarness = window.autoContinueHarnessMessage;
-  delete window.autoContinueHarnessMessage;
-
-  const detected1 = action.check();
-  assert("check() finds the fake banner", detected1 && detected1.button === fakeButton);
-  if (detected1) action.execute(detected1);
-  assert("execute() clicks the button when no harness message is set", clicked);
-
-  document.body.removeChild(fakeAlert);
-
-  // --- Test 2: harness message path ---
-  const fakeAlert2 = document.createElement("div");
-  fakeAlert2.setAttribute("role", "alert");
-  const fakeButton2 = document.createElement("button");
-  fakeButton2.textContent = "Continue";
-  let clicked2 = false;
-  fakeButton2.addEventListener("click", () => { clicked2 = true; });
-  fakeAlert2.appendChild(fakeButton2);
-  document.body.appendChild(fakeAlert2);
-
-  const fakeEditable = document.createElement("div");
-  fakeEditable.setAttribute("contenteditable", "true");
-  fakeEditable.classList.add("ProseMirror");
-  let enterDispatched = false;
-  fakeEditable.addEventListener("keydown", (e) => { if (e.key === "Enter") enterDispatched = true; });
-  document.body.appendChild(fakeEditable);
-
-  window.autoContinueHarnessMessage = "test harness message";
-  // Point the composer lookup at the fake box so the test never touches the
-  // real compose box. Restored in finally, even if execute() throws.
   const originalFindComposer = action.findComposer;
-  action.findComposer = () => fakeEditable;
+  const originalFindSend = action.findSendButton;
+
   try {
-    const detected2 = action.check();
-    if (detected2) action.execute(detected2);
+    // --- Test 1: plain click path ---
+    delete window.autoContinueHarnessMessage;
+    const b1 = makeBanner();
+    const d1 = action.check();
+    assert("check() finds the fake banner", d1 && d1.button === b1.btn);
+    if (d1) await action.execute(d1);
+    assert("execute() clicks Continue when no harness message is set", b1.state.clicked);
+    b1.alert.remove();
+
+    // --- Test 2: harness path, send button enabled ---
+    const b2 = makeBanner();
+    const box2 = makeComposer();
+    const s2 = makeSend(false);
+    action.findComposer = () => box2;
+    action.findSendButton = () => s2.btn;
+    window.autoContinueHarnessMessage = "test harness message";
+    const d2 = action.check();
+    if (d2) await action.execute(d2);
+    assert("execute() types the harness message", box2.textContent === "test harness message");
+    assert("execute() clicks the send button", s2.state.clicked);
+    assert("execute() does not click Continue when send succeeds", !b2.state.clicked);
+    b2.alert.remove(); box2.remove(); s2.btn.remove();
+
+    // --- Test 3: send button starts disabled, enables after insert ---
+    const b3 = makeBanner();
+    const box3 = makeComposer();
+    const s3 = makeSend(true);
+    action.findComposer = () => box3;
+    action.findSendButton = () => s3.btn;
+    setTimeout(() => { s3.btn.disabled = false; }, 200);
+    const d3 = action.check();
+    if (d3) await action.execute(d3);
+    assert("execute() waits for a disabled send button to enable, then clicks it", s3.state.clicked);
+    b3.alert.remove(); box3.remove(); s3.btn.remove();
+
+    // --- Test 4: findSendButton prefers the button near the composer ---
+    action.findSendButton = originalFindSend;
+    const decoy = document.createElement("button");
+    decoy.setAttribute("aria-label", "Send feedback");
+    document.body.prepend(decoy);
+    const wrap = document.createElement("div");
+    const inner = document.createElement("div");
+    const box4 = document.createElement("div");
+    const near = document.createElement("button");
+    near.setAttribute("aria-label", "Send message");
+    inner.appendChild(box4);
+    wrap.appendChild(inner);
+    wrap.appendChild(near);
+    document.body.appendChild(wrap);
+    assert("findSendButton() picks the send button near the composer over a page-wide decoy", action.findSendButton(box4) === near);
+    decoy.remove(); wrap.remove();
+
+    // --- Test 5: no banner present ---
+    delete window.autoContinueHarnessMessage;
+    assert("check() returns null when no banner is present", action.check() === null);
   } finally {
     action.findComposer = originalFindComposer;
-  }
-
-  assert("execute() types the harness message instead of clicking", fakeEditable.textContent === "test harness message");
-  assert("execute() does not click the button when a harness message is set", !clicked2);
-  assert("execute() dispatches Enter on the compose box", enterDispatched);
-
-  document.body.removeChild(fakeAlert2);
-  document.body.removeChild(fakeEditable);
-
-  // --- Test 3: no banner present ---
-  delete window.autoContinueHarnessMessage;
-  assert("check() returns null when no banner is present", action.check() === null);
-
-  // restore whatever harness message was set before this test ran
-  if (savedHarness === undefined) {
-    delete window.autoContinueHarnessMessage;
-  } else {
-    window.autoContinueHarnessMessage = savedHarness;
+    action.findSendButton = originalFindSend;
+    if (savedHarness === undefined) {
+      delete window.autoContinueHarnessMessage;
+    } else {
+      window.autoContinueHarnessMessage = savedHarness;
+    }
   }
 
   const failed = results.filter((r) => !r.pass).length;
